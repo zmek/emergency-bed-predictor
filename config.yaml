@@ -11,29 +11,29 @@
 carpentry: 'incubator'
 
 # Overall title for pages.
-title: 'Emergency bed demand prediction' # FIXME
+title: 'Emergency bed demand prediction'
 
 # Date the lesson was created (YYYY-MM-DD, this is empty by default)
-created: '2024-01-16' # FIXME
+created: '2024-01-16'
 
 # Comma-separated list of keywords for the lesson
-keywords: 'hospital, emergency, bed, predictive model' # FIXME
+keywords: 'hospital, emergency, bed, predictive model'
 
 # Life cycle stage of the lesson
 # possible values: pre-alpha, alpha, beta, stable
-life_cycle: 'pre-alpha' # FIXME
+life_cycle: 'pre-alpha'
 
-# License of the lesson
+# License of the lesson materials (recommended CC-BY 4.0)
 license: 'CC-BY 4.0'
 
 # Link to the source repository for this lesson
-source: 'https://github.com/zmek/emergency-bed-predictor' # FIXME
+source: 'https://github.com/zmek/emergency-bed-predictor'
 
 # Default branch of your lesson
 branch: 'main'
 
 # Who to contact if there are any issues
-contact: 'zella.king@ucl.ac.uk' # FIXME
+contact: 'zella.king@ucl.ac.uk'
 
 # Navigation ------------------------------------------------
 #
@@ -60,6 +60,7 @@ contact: 'zella.king@ucl.ac.uk' # FIXME
 # Order of episodes in your lesson
 episodes: 
 - introduction.Rmd
+- introducing-the-modelling-problem.Rmd
 
 # Information for Learners
 learners: 
