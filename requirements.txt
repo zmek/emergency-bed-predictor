@@ -1,0 +1,5 @@
+streamlit
+pandas
+numpy
+matplotlib
+git+https://github.com/zmek/patientflow.git@minimal-dataset
