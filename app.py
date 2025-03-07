@@ -13,6 +13,10 @@ from patientflow.viz.qq_plot import qq_plot
 # set up session state
 if "plots" not in st.session_state:
     st.session_state.plots = {}
+if "data_loaded" not in st.session_state:
+    st.session_state.data_loaded = False
+if "model_trained" not in st.session_state:
+    st.session_state.model_trained = False
 
 
 def generate_and_store_plot(plot_function, plot_key, *args, **kwargs):
@@ -27,8 +31,10 @@ def generate_and_store_plot(plot_function, plot_key, *args, **kwargs):
 
 
 def main():
-    st.title("Predict emergency bed demand in the next 8 hours")
-    st.header("Using a simple Machine Learning model trained on your data.")
+    st.title("Predict emergency bed demand")
+    st.header(
+        "The time is 09:30, and you want to know how many emergency beds you'll need by 17.30."
+    )
 
     # Add creator information
     st.markdown(
@@ -54,24 +60,28 @@ def main():
     # Introduction text
     st.markdown(
         """
-    This tool predicts the number of emergency patients who will need a hospital bed in the next 8 hours. 
-    You give it data about the patients in an Emergency Department (ED) at 09.30, and it will predict how many emergency beds you'll need by 17.30. 
-    The predictions cover beds needed for patients in the ED at 09.30, and people who haven't arrived by that time. It applies ED 4-hour targets to all patients' arrival times.
-    As part of this demo, you will train the model on a dataset of past visits to an ED. A fake dataset is provided.  
+    University College London Hospital (UCLH) has a tool that predicts their 8-hour bed demand, by specialty, assuming ED 4-hour targets are met. 
+    Their Site Operations team refer to it daily. 
     
+    This website is a demo of the tool, with fake data. 
 
-    Note: this tool is for demonstration purposes only. To use a tool like this for real, you would need to run this code in your own secure environment, prepare your data carefully, train the models, 
-    and validate that the trained models perform to your satisfaction. 
+    Once it has been set up with data from your hospital, it could be fed with data about patients in your ED today, and it will predict the number of beds you'll need by 17.30. 
+    Based on targets for 4-hour performance that you set, it could show you the number of beds needed if you want to meet those targets.  
+    
+    Below, I show the tool set-up process. I then give it some fake 'real-time' data (the patients in my ED at 09:30 today) and ask it to make predictions.
     """
     )
 
-    st.subheader("Step 1: Loading the data")
+    st.subheader("Step 1: Loading data on past ED visits")
 
     # File upload
     st.markdown(
-        """For this demonstration, we'll use a sample dataset of ED visits that contains 9 months of made-up data.
-        It includes both patients who were admitted to a ward and those who were discharged from the ED.
-        There is one row for each ED visit and snapshot date, with columns summarising what was known about the patient at that time.<br><br>
+        """The first step is to load data from the past about all patients who were in the Emergency Department (ED) at 09.30. 
+        Here I'm using 9 months of made-up data. 
+        The dataset includes all patients who were in the ED at 09:30 over the period, including patients later admitted to a ward and those who were later discharged.
+        There is one row for each ED visit on each date, with columns summarising what was known about the patient at that time.
+        
+        
         Click the button below to load the data."""
     )
 
@@ -96,7 +106,9 @@ def main():
             ).dt.date
 
             inpatient_arrivals = pd.read_csv(
-                "data/inpatient_arrivals.csv", parse_dates=["arrival_datetime"]
+                "data/inpatient_arrivals.csv",
+                parse_dates=["arrival_datetime"],
+                date_parser=lambda x: pd.to_datetime(x, utc=True),
             )
             # inpatient_arrivals = load_data(
             #     "data",
@@ -114,28 +126,45 @@ def main():
                 f"""The dataset starts on {start_date.strftime("%-d %B %Y")} and ends on {end_date.strftime("%-d %B %Y")}, 
                         and contains {len(ed_visits):,} ED visits over {num_days} days."""
             )
+            st.write(
+                """ 
+                        
+                        Click the button below to view the data. Scrolling to the right, you'll find a column called is_admitted, 
+                        which tells you whether the patient was admitted to a ward later."""
+            )
+
+            st.session_state.data_loaded = True
+            st.session_state.ed_visits = ed_visits
+            st.session_state.inpatient_arrivals = inpatient_arrivals
+            st.session_state.start_date = start_date
+            st.session_state.end_date = end_date
+            st.session_state.num_days = num_days
 
         except Exception as e:
             st.error(f"Error loading or processing the data: {str(e)}")
             return
 
+    # Only show the training section if data is loaded
+    if st.session_state.data_loaded:
         st.subheader("Step 2: Training the model")
 
+        st.write(
+            """From the data, the tool learns how a patient's characteristics - such as their age, lab results, vital signs or referrals made while in the ED - relate to their likelihood of admission under a specialty. 
+    This process is called 'training'. I use 80% of the data for training, and save the rest to test the performance of the model later."""
+        )
+
         # Calculate the split points in days
-        training_days = int(num_days * 0.7)
-        validation_days = int(num_days * 0.1)
+        training_days = int(st.session_state.num_days * 0.7)
+        validation_days = int(st.session_state.num_days * 0.1)
         # test_days will be the remainder
 
         # Calculate the start dates for each set
-        start_training_set = start_date
-        start_validation_set = start_date + pd.Timedelta(days=training_days)
-        start_test_set = start_validation_set + pd.Timedelta(days=validation_days)
-        end_test_set = end_date
-
-        st.write(
-            """Training the model, using the first 70% of the days in the uploaded file for training, and the next 10% for tuning the model. 
-                    The remaining 20% will be saved to test the performance on the model on unseen data."""
+        start_training_set = st.session_state.start_date
+        start_validation_set = st.session_state.start_date + pd.Timedelta(
+            days=training_days
         )
+        start_test_set = start_validation_set + pd.Timedelta(days=validation_days)
+        end_test_set = st.session_state.end_date
 
         # set up ordinal mappings
         ordinal_mappings = {
@@ -158,119 +187,140 @@ def main():
         ]
 
         # Train the model
+        if st.button("Train the model"):
+            with st.spinner("Training the model"):
+                model_metadata, models = train_all_models(
+                    st.session_state.ed_visits,
+                    st.session_state.start_training_set,
+                    st.session_state.start_validation_set,
+                    st.session_state.start_test_set,
+                    st.session_state.end_test_set,
+                    st.session_state.inpatient_arrivals,
+                    prediction_times=[(9, 30)],
+                    prediction_window=8,
+                    yta_time_interval=15,
+                    epsilon=0.00001,
+                    grid_params={"n_estimators": [30]},
+                    exclude_columns=exclude_from_training_data,
+                    ordinal_mappings=ordinal_mappings,
+                    uclh=False,
+                    random_seed=42,
+                    save_models=False,
+                    test_realtime=False,
+                )
 
-        model_metadata, models = train_all_models(
-            ed_visits,
-            start_training_set,
-            start_validation_set,
-            start_test_set,
-            end_test_set,
-            inpatient_arrivals,
-            prediction_times=[(9, 30)],
-            prediction_window=8,
-            yta_time_interval=15,
-            epsilon=0.00001,
-            grid_params={"n_estimators": [30]},
-            exclude_columns=exclude_from_training_data,
-            ordinal_mappings=ordinal_mappings,
-            uclh=False,
-            random_seed=42,
-            save_models=False,
-            test_realtime=False,
-        )
+                # Save only the new variables in session state
+                st.session_state.model_metadata = model_metadata
+                st.session_state.models = models
+                st.session_state.exclude_from_training_data = exclude_from_training_data
+                st.session_state.model_trained = True
+                st.success(f"Model trained successfully.")
 
-        st.write(f"Model trained successfully.")
+    # Only show the predictions section if model is trained
+    if st.session_state.model_trained:
+        st.subheader("Step 3: Getting some real-time predictions")
 
-        st.subheader("Step 3: Evaluating the model on a test set")
         st.write(
-            """For each date in the test set, we'll load in the patients in the ED at 09.30, 
-                 and compare the model's predictions with the actual number of patients who were admitted to a ward."""
-        )
-        # create the test set
-        _, _, test_visits = create_temporal_splits(
-            ed_visits.reset_index().copy(),
-            start_training_set,
-            start_validation_set,
-            start_test_set,
-            end_test_set,
-            col_name="snapshot_date",
+            "Now let's give the model some real-time data about patients in the ED at 09:30 today, and ask it to make predictions."
         )
 
-        # get X_test and y_test at the chosen prediction time for input into the admissions model
-        X_test, y_test = get_snapshots_at_prediction_time(
-            test_visits,
-            prediction_time=(9, 30),
-            exclude_columns=exclude_from_training_data,
-            single_snapshot_per_visit=False,
-        )
+        if st.button("Show me some real-time predictions"):
 
-        snapshots_dict = prepare_snapshots_dict(
-            test_visits[(test_visits.prediction_time == (9, 30))]
-        )
-        first_record_key = list(snapshots_dict.keys())[0]
+            # create the test set
+            _, _, test_visits = create_temporal_splits(
+                st.session_state.ed_visits.reset_index().copy(),
+                st.session_state.start_training_set,
+                st.session_state.start_validation_set,
+                st.session_state.start_test_set,
+                st.session_state.end_test_set,
+                col_name="snapshot_date",
+            )
 
-        # get probability distribution for this time of day
-        with st.spinner("Calculating probability distributions for test set..."):
-            prob_dist = get_prob_dist(
-                snapshots_dict,
+            # Get X_test and y_test using session state variables
+            X_test, y_test = get_snapshots_at_prediction_time(
+                test_visits,
+                prediction_time=(9, 30),
+                exclude_columns=st.session_state.exclude_from_training_data,
+                single_snapshot_per_visit=False,
+            )
+
+            snapshots_dict = prepare_snapshots_dict(
+                test_visits[(test_visits.prediction_time == (9, 30))]
+            )
+
+            last_record_key = list(snapshots_dict.keys())[-1]
+
+            last_prob_dist = get_prob_dist(
+                {last_record_key: snapshots_dict[last_record_key]},
                 X_test,
                 y_test,
-                model=models["admissions"]["admissions_0930"],
+                model=st.session_state.models["admissions"]["admissions_0930"],
             )
-            st.success("Probability distributions calculated successfully!")
 
-        st.write(
-            "Below is the probability distribution for the number of beds needed by patients in ED at 09:30 on the first record in the test set."
-        )
-
-        title_ = f"Probability distribution for number of beds needed by patients in ED at 09:30 on {first_record_key}"
-        prob_dist_first_record = generate_and_store_plot(
-            prob_dist_plot,
-            "prob_dist_first_record",
-            prob_dist_data=prob_dist[first_record_key]["agg_predicted"],
-            title=title_,
-            include_titles=True,
-            return_figure=True,
-        )
-
-        # Add vertical line for observed value
-        if prob_dist_first_record:
-            observed_value = prob_dist[first_record_key]["agg_observed"]
-            prob_dist_first_record.axes[0].axvline(
-                x=observed_value,
-                color="red",
-                linestyle="--",
-                label=f"Actual number of beds needed: {observed_value}",
+            title_ = f"Probability distribution for number of beds needed by patients in ED at 09:30 on {last_record_key}"
+            prob_dist_last_record = generate_and_store_plot(
+                prob_dist_plot,
+                "prob_dist_first_record",
+                prob_dist_data=last_prob_dist[last_record_key]["agg_predicted"],
+                title=title_,
+                include_titles=True,
+                return_figure=True,
             )
-            prob_dist_first_record.axes[0].legend()
-            st.pyplot(prob_dist_first_record)
 
-        # We now show a plot of the performance of the model on the whole test set
-        st.write(
-            """Below is a plot that helps us to evaluate the performance of the model on the whole test set period.
-            If the model performed well, the line will be close to the diagonal line"""
-        )
-        title = f"Probability distribution for number of beds needed by patients in ED at 09:30 on {first_record_key}"
-        prob_dist_first_record = generate_and_store_plot(
-            prob_dist_plot,
-            "prob_dist_first_record",
-            prob_dist_data=prob_dist[first_record_key]["agg_predicted"],
-            title=title,
-            include_titles=True,
-            return_figure=True,
-        )
-        title = "Q-Q Plot for emergency demand predictions at 09:30"
-        qq_plot_test_set = generate_and_store_plot(
-            qq_plot,
-            "qq_plot_test_set",
-            snapshots_dict.keys(),
-            prob_dist,
-            title,
-            return_figure=True,
-            figsize=(3, 3),
-        )
-        if qq_plot_test_set:
-            st.pyplot(qq_plot_test_set)
+            # Add vertical line for observed value
+            if prob_dist_last_record:
+                observed_value = last_prob_dist[last_record_key]["agg_observed"]
+                prob_dist_last_record.axes[0].axvline(
+                    x=observed_value,
+                    color="red",
+                    linestyle="--",
+                    label=f"Actual number of beds needed: {observed_value}",
+                )
+                prob_dist_last_record.axes[0].legend()
+                st.pyplot(prob_dist_last_record)
+
+            st.subheader("Step 4: Evaluating the model on a test set")
+            st.write(
+                """For each date in the test set, we'll load in the patients in the ED at 09.30, 
+                    and compare the model's predictions with the actual number of patients who were admitted to a ward."""
+            )
+
+            # get probability distribution for this time of day
+            with st.spinner("Calculating probability distributions for test set..."):
+                prob_dist = get_prob_dist(
+                    snapshots_dict,
+                    X_test,
+                    y_test,
+                    model=st.session_state.models["admissions"]["admissions_0930"],
+                )
+                st.success("Probability distributions calculated successfully")
+
+            # We now show a plot of the performance of the model on the whole test set
+            st.write(
+                """Below is a plot that helps us to evaluate the performance of the model on the whole test set period.
+                If the model performed well, the line will be close to the diagonal line"""
+            )
+            title = f"Probability distribution for number of beds needed by patients in ED at 09:30 on {last_record_key}"
+            prob_dist_first_record = generate_and_store_plot(
+                prob_dist_plot,
+                "prob_dist_first_record",
+                prob_dist_data=prob_dist[last_record_key]["agg_predicted"],
+                title=title,
+                include_titles=True,
+                return_figure=True,
+            )
+            title = "Q-Q Plot for emergency demand predictions at 09:30"
+            qq_plot_test_set = generate_and_store_plot(
+                qq_plot,
+                "qq_plot_test_set",
+                snapshots_dict.keys(),
+                prob_dist,
+                title,
+                return_figure=True,
+                figsize=(3, 3),
+            )
+            if qq_plot_test_set:
+                st.pyplot(qq_plot_test_set)
 
 
 if __name__ == "__main__":
