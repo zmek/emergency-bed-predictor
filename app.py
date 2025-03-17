@@ -9,6 +9,7 @@ from patientflow.prepare import prepare_snapshots_dict
 from patientflow.aggregate import get_prob_dist
 from patientflow.viz.prob_dist_plot import prob_dist_plot
 from patientflow.viz.qq_plot import qq_plot
+from patientflow.predictors.weighted_poisson_predictor import WeightedPoissonPredictor
 
 # set up session state
 if "plots" not in st.session_state:
@@ -166,6 +167,11 @@ def main():
         start_test_set = start_validation_set + pd.Timedelta(days=validation_days)
         end_test_set = st.session_state.end_date
 
+        st.session_state.start_training_set = start_training_set
+        st.session_state.start_validation_set = start_validation_set
+        st.session_state.start_test_set = start_test_set
+        st.session_state.end_test_set = end_test_set
+
         # set up ordinal mappings
         ordinal_mappings = {
             "latest_obs_manchester_triage_acuity": [
@@ -197,7 +203,7 @@ def main():
                     st.session_state.end_test_set,
                     st.session_state.inpatient_arrivals,
                     prediction_times=[(9, 30)],
-                    prediction_window=8,
+                    prediction_window=8 * 60,
                     yta_time_interval=15,
                     epsilon=0.00001,
                     grid_params={"n_estimators": [30]},
@@ -254,7 +260,9 @@ def main():
                 {last_record_key: snapshots_dict[last_record_key]},
                 X_test,
                 y_test,
-                model=st.session_state.models["admissions"]["admissions_0930"],
+                model=st.session_state.models["admissions"][
+                    "admissions_0930"
+                ].calibrated_pipeline,
             )
 
             title_ = f"Probability distribution for number of beds needed by patients in ED at 09:30 on {last_record_key}"
@@ -269,58 +277,99 @@ def main():
 
             # Add vertical line for observed value
             if prob_dist_last_record:
-                observed_value = last_prob_dist[last_record_key]["agg_observed"]
-                prob_dist_last_record.axes[0].axvline(
-                    x=observed_value,
-                    color="red",
-                    linestyle="--",
-                    label=f"Actual number of beds needed: {observed_value}",
-                )
-                prob_dist_last_record.axes[0].legend()
+                # observed_value = last_prob_dist[last_record_key]["agg_observed"]
+                # prob_dist_last_record.axes[0].axvline(
+                #     x=observed_value,
+                #     color="red",
+                #     linestyle="--",
+                #     label=f"Actual number of beds needed: {observed_value}",
+                # )
+                # prob_dist_last_record.axes[0].legend()
                 st.pyplot(prob_dist_last_record)
 
-            st.subheader("Step 4: Evaluating the model on a test set")
+                st.session_state.prob_dist_generated = True
+                st.session_state.last_prob_dist = last_prob_dist
+                st.session_state.last_record_key = last_record_key
+
+        # Move these blocks OUTSIDE the "Show me predictions" button (dedent)
+        if (
+            "prob_dist_generated" in st.session_state
+            and st.session_state.prob_dist_generated
+        ):
+            st.subheader("Step 4: Confirm your ED targets")
             st.write(
-                """For each date in the test set, we'll load in the patients in the ED at 09.30, 
-                    and compare the model's predictions with the actual number of patients who were admitted to a ward."""
+                """The numbers above only patients currently in the ED. 
+                Over the 8 hours between 09:30 and 17:30 there will be demand from patients who have not yet arrived.
+                If your ED is hitting its targets, some of these patients will also need to be admitted by 17:30."""
             )
 
-            # get probability distribution for this time of day
-            with st.spinner("Calculating probability distributions for test set..."):
-                prob_dist = get_prob_dist(
-                    snapshots_dict,
-                    X_test,
-                    y_test,
-                    model=st.session_state.models["admissions"]["admissions_0930"],
+            st.write(
+                """You have the option to specify your own ED targets. The default is 80% of patients being admitted within 4 hours and 99% within 12 hours. Use the sidebar to change this."""
+            )
+
+            # Sidebar controls for ED performance
+            st.sidebar.header("Your aspirations for ED performance")
+            st.sidebar.subheader("Main target")
+            x1 = st.sidebar.number_input("Main target: Hours since ED arrival", value=4)
+            y1 = (
+                st.sidebar.number_input(
+                    "Main target: Percentage of patients processed", value=80
                 )
-                st.success("Probability distributions calculated successfully")
+                / 100
+            )
 
-            # We now show a plot of the performance of the model on the whole test set
-            st.write(
-                """Below is a plot that helps us to evaluate the performance of the model on the whole test set period.
-                If the model performed well, the line will be close to the diagonal line"""
+            st.sidebar.subheader("Mop-up target")
+            x2 = st.sidebar.number_input(
+                "Mop-up target: Hours since ED arrival", value=12
             )
-            title = f"Probability distribution for number of beds needed by patients in ED at 09:30 on {last_record_key}"
-            prob_dist_first_record = generate_and_store_plot(
-                prob_dist_plot,
-                "prob_dist_first_record",
-                prob_dist_data=prob_dist[last_record_key]["agg_predicted"],
-                title=title,
-                include_titles=True,
-                return_figure=True,
+            y2 = (
+                st.sidebar.number_input(
+                    "Mop-up target: Percentage of patients processed", value=99
+                )
+                / 100
             )
-            title = "Q-Q Plot for emergency demand predictions at 09:30"
-            qq_plot_test_set = generate_and_store_plot(
-                qq_plot,
-                "qq_plot_test_set",
-                snapshots_dict.keys(),
-                prob_dist,
-                title,
-                return_figure=True,
-                figsize=(3, 3),
+
+            st.markdown(
+                f"Please confirm your ED performance targets:<br>"
+                f"- **Main target:** Process {y1*100:.0f}% of admitted patients within {x1} hours<br>"
+                f"- **Mop-up target:** Process {y2*100:.0f}% of admitted patients within {x2} hours",
+                unsafe_allow_html=True,
             )
-            if qq_plot_test_set:
-                st.pyplot(qq_plot_test_set)
+
+            if st.button("Confirm your targets"):
+                st.session_state.ed_targets = {
+                    "main_target_hours": x1,
+                    "main_target_percent": y1,
+                    "mopup_target_hours": x2,
+                    "mopup_target_percent": y2,
+                }
+                st.session_state.targets_confirmed = True
+                st.success("Targets confirmed and saved")
+
+                # Move the calculations here so they update when targets are confirmed
+                prediction_context = {"medical": {"prediction_time": (9, 30)}}
+                yta_model = st.session_state.models["yet_to_arrive_8_hours"]
+                targets = st.session_state.ed_targets
+                yta_preds = yta_model.predict(
+                    prediction_context,
+                    targets["main_target_hours"],
+                    targets["main_target_percent"],
+                    targets["mopup_target_hours"],
+                    targets["mopup_target_percent"],
+                )
+
+                title_ = f"Probability distribution for number of medical beds needed by 17:30 for patients arriving after 09:30 on {st.session_state.last_record_key}"
+                prob_dist_yta_medical = generate_and_store_plot(
+                    prob_dist_plot,
+                    "prob_dist_yta_medical",
+                    prob_dist_data=yta_preds["medical"],
+                    title=title_,
+                    include_titles=True,
+                    return_figure=True,
+                )
+
+                if prob_dist_yta_medical:
+                    st.pyplot(prob_dist_yta_medical)
 
 
 if __name__ == "__main__":
