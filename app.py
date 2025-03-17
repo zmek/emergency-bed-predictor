@@ -9,7 +9,9 @@ from patientflow.prepare import prepare_snapshots_dict
 from patientflow.aggregate import get_prob_dist
 from patientflow.viz.prob_dist_plot import prob_dist_plot
 from patientflow.viz.qq_plot import qq_plot
-from patientflow.predictors.weighted_poisson_predictor import WeightedPoissonPredictor
+
+from patientflow.viz.pipeline_plots import create_colour_dict
+
 
 # set up session state
 if "plots" not in st.session_state:
@@ -111,14 +113,7 @@ def main():
                 parse_dates=["arrival_datetime"],
                 date_parser=lambda x: pd.to_datetime(x, utc=True),
             )
-            # inpatient_arrivals = load_data(
-            #     "data",
-            #     file_name="inpatient_arrivals.csv",
-            #     index_column="arrival_datetime",
-            #     home_path=app_dir,
-            # )
 
-            # More robust date handling
             start_date = ed_visits.snapshot_date.min()
             end_date = ed_visits.snapshot_date.max()
             num_days = len(ed_visits.snapshot_date.unique())
@@ -265,7 +260,11 @@ def main():
                 ].calibrated_pipeline,
             )
 
-            title_ = f"Probability distribution for number of beds needed by patients in ED at 09:30 on {last_record_key}"
+            spec_colour_dict = create_colour_dict()
+
+            title_ = (
+                f"Number of beds needed by patients in ED at 09:30 on {last_record_key}"
+            )
             prob_dist_last_record = generate_and_store_plot(
                 prob_dist_plot,
                 "prob_dist_first_record",
@@ -273,9 +272,10 @@ def main():
                 title=title_,
                 include_titles=True,
                 return_figure=True,
+                bar_colour=spec_colour_dict["single"]["all"],
             )
 
-            # Add vertical line for observed value
+            # Store plot and data in session state without displaying
             if prob_dist_last_record:
                 # observed_value = last_prob_dist[last_record_key]["agg_observed"]
                 # prob_dist_last_record.axes[0].axvline(
@@ -285,13 +285,16 @@ def main():
                 #     label=f"Actual number of beds needed: {observed_value}",
                 # )
                 # prob_dist_last_record.axes[0].legend()
-                st.pyplot(prob_dist_last_record)
-
+                # st.pyplot(prob_dist_last_record)
                 st.session_state.prob_dist_generated = True
                 st.session_state.last_prob_dist = last_prob_dist
                 st.session_state.last_record_key = last_record_key
+                st.session_state.current_patients_plot = prob_dist_last_record
 
-        # Move these blocks OUTSIDE the "Show me predictions" button (dedent)
+        # Display the plot outside the button click handler
+        if "current_patients_plot" in st.session_state:
+            st.pyplot(st.session_state.current_patients_plot)
+
         if (
             "prob_dist_generated" in st.session_state
             and st.session_state.prob_dist_generated
@@ -347,29 +350,36 @@ def main():
                 st.success("Targets confirmed and saved")
 
                 # Move the calculations here so they update when targets are confirmed
-                prediction_context = {"medical": {"prediction_time": (9, 30)}}
-                yta_model = st.session_state.models["yet_to_arrive_8_hours"]
-                targets = st.session_state.ed_targets
-                yta_preds = yta_model.predict(
-                    prediction_context,
-                    targets["main_target_hours"],
-                    targets["main_target_percent"],
-                    targets["mopup_target_hours"],
-                    targets["mopup_target_percent"],
-                )
 
-                title_ = f"Probability distribution for number of medical beds needed by 17:30 for patients arriving after 09:30 on {st.session_state.last_record_key}"
-                prob_dist_yta_medical = generate_and_store_plot(
-                    prob_dist_plot,
-                    "prob_dist_yta_medical",
-                    prob_dist_data=yta_preds["medical"],
-                    title=title_,
-                    include_titles=True,
-                    return_figure=True,
-                )
+                specialties = ["medical", "surgical", "haem/onc", "paediatric"]
+                spec_colour_dict = create_colour_dict()
 
-                if prob_dist_yta_medical:
-                    st.pyplot(prob_dist_yta_medical)
+                for specialty in specialties:
+
+                    prediction_context = {specialty: {"prediction_time": (9, 30)}}
+                    yta_model = st.session_state.models["yet_to_arrive_8_hours"]
+                    targets = st.session_state.ed_targets
+                    yta_preds = yta_model.predict(
+                        prediction_context,
+                        targets["main_target_hours"],
+                        targets["main_target_percent"],
+                        targets["mopup_target_hours"],
+                        targets["mopup_target_percent"],
+                    )
+
+                    title_ = f"Number of {specialty} beds needed by 17:30 for patients arriving after 09:30 on {st.session_state.last_record_key}"
+                    prob_dist_yta = generate_and_store_plot(
+                        prob_dist_plot,
+                        "prob_dist_yta",
+                        prob_dist_data=yta_preds[specialty],
+                        title=title_,
+                        include_titles=True,
+                        return_figure=True,
+                        bar_colour=spec_colour_dict["single"][specialty],
+                    )
+
+                    if prob_dist_yta:
+                        st.pyplot(prob_dist_yta)
 
 
 if __name__ == "__main__":
