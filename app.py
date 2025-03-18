@@ -33,6 +33,38 @@ def generate_and_store_plot(plot_function, plot_key, *args, **kwargs):
         return None
 
 
+def format_ed_visits_display(df):
+    """Format ED visits data for display by renaming columns and selecting relevant ones.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame containing ED visits data
+
+    Returns:
+        pd.DataFrame: Formatted DataFrame with renamed columns and selected fields
+    """
+    return df.reset_index(drop=True).rename(
+        columns={
+            "is_admitted": "admitted_after_ed",
+            "specialty": "specialty_admitted_to",
+            "has_consultation": "has_referral",
+            "is_majors_resus": "is_in_majors_resus",
+            "over_12_hours": "over_12_hours_in_ed",
+        }
+    )[
+        [
+            "visit_number",
+            "age_group",
+            "sex",
+            "arrival_method",
+            "is_in_majors_resus",
+            "has_referral",
+            "over_12_hours_in_ed",
+            "admitted_after_ed",
+            "specialty_admitted_to",
+        ]
+    ]
+
+
 def main():
     st.title("Predict emergency bed demand")
     st.header(
@@ -125,8 +157,14 @@ def main():
             st.write(
                 """ 
                         
-                        Click the button below to view the data. Scrolling to the right, you'll find a column called is_admitted, 
+                        Click the button below to view the data. Scrolling to the right, you'll find a column called admitted_after_ed, 
                         which tells you whether the patient was admitted to a ward later."""
+            )
+
+            st.write(
+                format_ed_visits_display(
+                    ed_visits[ed_visits.prediction_time == (9, 30)]
+                ).tail()
             )
 
             st.session_state.data_loaded = True
@@ -221,35 +259,50 @@ def main():
     if st.session_state.model_trained:
         st.subheader("Step 3: Getting some real-time predictions")
 
+        # create the test set
+        _, _, test_visits = create_temporal_splits(
+            st.session_state.ed_visits.reset_index().copy(),
+            st.session_state.start_training_set,
+            st.session_state.start_validation_set,
+            st.session_state.start_test_set,
+            st.session_state.end_test_set,
+            col_name="snapshot_date",
+        )
+
+        # Get X_test and y_test using session state variables
+        X_test, y_test = get_snapshots_at_prediction_time(
+            test_visits,
+            prediction_time=(9, 30),
+            exclude_columns=st.session_state.exclude_from_training_data,
+            single_snapshot_per_visit=False,
+        )
+
+        snapshots_dict = prepare_snapshots_dict(
+            test_visits[(test_visits.prediction_time == (9, 30))]
+        )
+
+        last_record_key = list(snapshots_dict.keys())[-1]
+
+        real_time_data = test_visits[
+            (test_visits.snapshot_date == last_record_key)
+            & (test_visits.prediction_time == (9, 30))
+        ]
+
         st.write(
-            "Now let's give the model some real-time data about patients in the ED at 09:30 today, and ask it to make predictions."
+            f"""
+            Now let's make some predictions using the trained model. 
+            Here is a set of patients in the ED at a randomly chosen time of 09:30 on {last_record_key}.
+            There were {len(real_time_data):,} patients in the ED, including {len(real_time_data[real_time_data.is_majors_resus]):,} in Majors or Resus.
+            """
+        )
+
+        st.write(
+            format_ed_visits_display(real_time_data)
+            .drop(columns=["admitted_after_ed", "specialty_admitted_to"])
+            .head()
         )
 
         if st.button("Show me some real-time predictions"):
-
-            # create the test set
-            _, _, test_visits = create_temporal_splits(
-                st.session_state.ed_visits.reset_index().copy(),
-                st.session_state.start_training_set,
-                st.session_state.start_validation_set,
-                st.session_state.start_test_set,
-                st.session_state.end_test_set,
-                col_name="snapshot_date",
-            )
-
-            # Get X_test and y_test using session state variables
-            X_test, y_test = get_snapshots_at_prediction_time(
-                test_visits,
-                prediction_time=(9, 30),
-                exclude_columns=st.session_state.exclude_from_training_data,
-                single_snapshot_per_visit=False,
-            )
-
-            snapshots_dict = prepare_snapshots_dict(
-                test_visits[(test_visits.prediction_time == (9, 30))]
-            )
-
-            last_record_key = list(snapshots_dict.keys())[-1]
 
             last_prob_dist = get_prob_dist(
                 {last_record_key: snapshots_dict[last_record_key]},
