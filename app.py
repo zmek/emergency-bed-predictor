@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from patientflow.load import load_data
-from patientflow.prepare import create_temporal_splits, get_snapshots_at_prediction_time
+from patientflow.prepare import create_temporal_splits, prepare_patient_snapshots
 from patientflow.train.emergency_demand import train_all_models
-from patientflow.prepare import prepare_snapshots_dict
+from patientflow.prepare import prepare_group_snapshot_dict
 from patientflow.aggregate import get_prob_dist
 from patientflow.viz.prob_dist_plot import prob_dist_plot
 from patientflow.viz.qq_plot import qq_plot
@@ -228,7 +228,7 @@ def main():
         # Train the model
         if st.button("Train the model"):
             with st.spinner("Training the model"):
-                model_metadata, models = train_all_models(
+                models = train_all_models(
                     st.session_state.ed_visits,
                     st.session_state.start_training_set,
                     st.session_state.start_validation_set,
@@ -242,14 +242,13 @@ def main():
                     grid_params={"n_estimators": [30]},
                     exclude_columns=exclude_from_training_data,
                     ordinal_mappings=ordinal_mappings,
-                    uclh=False,
                     random_seed=42,
                     save_models=False,
                     test_realtime=False,
+                    return_models=True
                 )
 
                 # Save only the new variables in session state
-                st.session_state.model_metadata = model_metadata
                 st.session_state.models = models
                 st.session_state.exclude_from_training_data = exclude_from_training_data
                 st.session_state.model_trained = True
@@ -270,14 +269,14 @@ def main():
         )
 
         # Get X_test and y_test using session state variables
-        X_test, y_test = get_snapshots_at_prediction_time(
+        X_test, y_test = prepare_patient_snapshots(
             test_visits,
             prediction_time=(9, 30),
             exclude_columns=st.session_state.exclude_from_training_data,
             single_snapshot_per_visit=False,
         )
 
-        snapshots_dict = prepare_snapshots_dict(
+        snapshots_dict = prepare_group_snapshot_dict(
             test_visits[(test_visits.prediction_time == (9, 30))]
         )
 
@@ -304,11 +303,13 @@ def main():
 
         if st.button("Show me some real-time predictions"):
 
+            admission_models, _, _ = st.session_state.models
+
             last_prob_dist = get_prob_dist(
                 {last_record_key: snapshots_dict[last_record_key]},
                 X_test,
                 y_test,
-                model=st.session_state.models["admissions"][
+                model=admission_models[
                     "admissions_0930"
                 ].calibrated_pipeline,
             )
@@ -410,7 +411,7 @@ def main():
                 for specialty in specialties:
 
                     prediction_context = {specialty: {"prediction_time": (9, 30)}}
-                    yta_model = st.session_state.models["yet_to_arrive_8_hours"]
+                    _, _, yta_model = st.session_state.models
                     targets = st.session_state.ed_targets
                     yta_preds = yta_model.predict(
                         prediction_context,
@@ -429,6 +430,7 @@ def main():
                         include_titles=True,
                         return_figure=True,
                         bar_colour=spec_colour_dict["single"][specialty],
+                        truncate_at_beds = (0,20)
                     )
 
                     if prob_dist_yta:

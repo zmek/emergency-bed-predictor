@@ -2,4 +2,4 @@ streamlit
 pandas
 numpy
 matplotlib
-git+https://github.com/zmek/patientflow.git@minimal-dataset
+git+https://github.com/zmek/patientflow.git@streamlit-app
